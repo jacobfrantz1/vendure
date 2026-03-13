@@ -118,6 +118,8 @@ type Mutation {
     authenticate(input: AuthenticationInput!, rememberMe: Boolean): AuthenticationResult!
     "End the current authenticated session"
     logout: Success!
+    "End all authenticated sessions for the current user"
+    logoutEverywhere: Success!
     """
     Register a Customer account with the given credentials. There are three possible registration flows:
 

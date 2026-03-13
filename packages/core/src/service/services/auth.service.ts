@@ -133,9 +133,33 @@ export class AuthService {
 
     /**
      * @description
-     * Deletes all sessions for the user associated with the given session token.
+     * Deletes the session with the given session token. Used by the `logout` mutation.
      */
     async destroyAuthenticatedSession(ctx: RequestContext, sessionToken: string): Promise<void> {
+        const session = await this.connection.getRepository(ctx, AuthenticatedSession).findOne({
+            where: { token: sessionToken },
+            relations: ['user', 'user.authenticationMethods'],
+        });
+
+        if (session) {
+            const authenticationStrategy = this.getAuthenticationStrategy(
+                ctx.apiType,
+                session.authenticationStrategy,
+            );
+            if (typeof authenticationStrategy.onLogOut === 'function') {
+                await authenticationStrategy.onLogOut(ctx, session.user);
+            }
+            await this.eventBus.publish(new LogoutEvent(ctx));
+            return this.sessionService.deleteSessionByToken(ctx, sessionToken);
+        }
+    }
+
+    /**
+     * @description
+     * Deletes all sessions for the user associated with the given session token.
+     * Used by the `logoutEverywhere` mutation.
+     */
+    async destroyAllAuthenticatedSessions(ctx: RequestContext, sessionToken: string): Promise<void> {
         const session = await this.connection.getRepository(ctx, AuthenticatedSession).findOne({
             where: { token: sessionToken },
             relations: ['user', 'user.authenticationMethods'],

@@ -474,6 +474,14 @@ export const logoutDocument = graphql(`
     }
 `);
 
+export const logoutEverywhereDocument = graphql(`
+    mutation LogoutEverywhere {
+        logoutEverywhere {
+            success
+        }
+    }
+`);
+
 export const getCountryListDocument = graphql(`
     query GetCountryList($options: CountryListOptions) {
         countries(options: $options) {

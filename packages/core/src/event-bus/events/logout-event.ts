@@ -4,7 +4,7 @@ import { VendureEvent } from '../vendure-event';
 
 /**
  * @description
- * This event is fired when a user logs out via the shop or admin API `logout` mutation.
+ * This event is fired when a user logs out via the shop or admin API `logout` or `logoutEverywhere` mutation.
  *
  * @docsCategory events
  * @docsPage Event Types

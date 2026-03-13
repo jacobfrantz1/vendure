@@ -87,6 +87,31 @@ export class BaseAuthResolver {
         return { success: true };
     }
 
+    async logoutEverywhere(ctx: RequestContext, req: Request, res: Response): Promise<Success> {
+        const extraction = extractSessionToken(
+            req,
+            this.configService.authOptions.tokenMethod,
+            this.configService.authOptions.apiKeyHeaderKey,
+        );
+
+        // ApiKey "Sessions" are not meant to be logged out of
+        if (!extraction?.token || extraction.method === 'api-key') {
+            return { success: false };
+        }
+
+        await this.authService.destroyAllAuthenticatedSessions(ctx, extraction.token);
+
+        setSessionToken({
+            req,
+            res,
+            authOptions: this.configService.authOptions,
+            rememberMe: false,
+            sessionToken: '',
+        });
+
+        return { success: true };
+    }
+
     /**
      * Returns information about the current authenticated user.
      */

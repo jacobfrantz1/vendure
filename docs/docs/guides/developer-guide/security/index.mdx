@@ -120,7 +120,7 @@ Out of the box:
 - We deny by default for non-public API requests
 - Built-in CORS controls for session cookies
 - Directory listing is not possible via default configuration (e.g. exposing web root dir contents)
-- Stateful session identifiers should be invalidated on the server after logout. On logout we delete all session records from the DB & session cache.
+- Stateful session identifiers are invalidated on the server after logout. The `logout` mutation deletes the current session from the DB & session cache. The `logoutEverywhere` mutation deletes all sessions for the user, enabling users to sign out of all devices.
 
 To consider:
 
@@ -214,7 +214,7 @@ Out of the box:
 - Uses strong password hashing (bcrypt with 12 salt rounds)
 - Session identifiers are not exposed in API urls (instead we use headers/cookies)
 - New session tokens always regenerated after successful login
-- Sessions deleted during logout
+- Current session deleted during `logout`, all sessions deleted during `logoutEverywhere`
 - Cryptographically-strong, high-entropy session tokens are used (crypto.randomBytes API)
 
 To consider:

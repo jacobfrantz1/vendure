@@ -1,6 +1,6 @@
 /* eslint-disable @typescript-eslint/no-non-null-assertion */
 import { CachedSession, mergeConfig, SessionCacheStrategy } from '@vendure/core';
-import { createTestEnvironment } from '@vendure/testing';
+import { createTestEnvironment, SimpleGraphQLClient } from '@vendure/testing';
 import path from 'path';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
@@ -8,7 +8,12 @@ import { initialData } from '../../../e2e-common/e2e-initial-data';
 import { TEST_SETUP_TIMEOUT_MS, testConfig } from '../../../e2e-common/test-config';
 import { SUPER_ADMIN_USER_IDENTIFIER, SUPER_ADMIN_USER_PASSWORD } from '../../common/src/shared-constants';
 
-import { attemptLoginDocument, logoutDocument, MeDocument } from './graphql/shared-definitions';
+import {
+    attemptLoginDocument,
+    logoutDocument,
+    logoutEverywhereDocument,
+    MeDocument,
+} from './graphql/shared-definitions';
 
 const testSessionCache = new Map<string, CachedSession>();
 const getSpy = vi.fn();
@@ -152,6 +157,107 @@ describe('Session expiry', () => {
             expect(e.message).toContain('You are not currently authorized to perform this action');
         }
     }, 10000);
+});
+
+describe('Logout behavior', () => {
+    const config = testConfig();
+    const { server, adminClient } = createTestEnvironment(config);
+
+    // Create a second client to simulate a different session
+    const { port, adminApiPath } = config.apiOptions;
+    const secondAdminClient = new SimpleGraphQLClient(config, `http://localhost:${port}/${adminApiPath!}`);
+
+    beforeAll(async () => {
+        await server.init({
+            initialData,
+            productsCsvPath: path.join(__dirname, 'fixtures/e2e-products-minimal.csv'),
+            customerCount: 1,
+        });
+    }, TEST_SETUP_TIMEOUT_MS);
+
+    afterAll(async () => {
+        await server.destroy();
+    });
+
+    it('logout only removes the active session', async () => {
+        // Login with the first client
+        await adminClient.query(attemptLoginDocument, {
+            username: SUPER_ADMIN_USER_IDENTIFIER,
+            password: SUPER_ADMIN_USER_PASSWORD,
+        });
+
+        // Verify the first client is logged in
+        const { me: me1 } = await adminClient.query(MeDocument);
+        expect(me1?.identifier).toBe(SUPER_ADMIN_USER_IDENTIFIER);
+
+        // Login with the second client (creates a second session for the same user)
+        await secondAdminClient.query(attemptLoginDocument, {
+            username: SUPER_ADMIN_USER_IDENTIFIER,
+            password: SUPER_ADMIN_USER_PASSWORD,
+        });
+
+        // Verify the second client is logged in
+        const { me: me2 } = await secondAdminClient.query(MeDocument);
+        expect(me2?.identifier).toBe(SUPER_ADMIN_USER_IDENTIFIER);
+
+        // Logout from the first client
+        const { logout } = await adminClient.query(logoutDocument);
+        expect(logout.success).toBe(true);
+
+        // Verify the first client is now logged out
+        try {
+            await adminClient.query(MeDocument);
+            fail('Should have thrown');
+        } catch (e: any) {
+            expect(e.message).toContain('You are not currently authorized to perform this action');
+        }
+
+        // Verify the second client is still logged in
+        const { me: me3 } = await secondAdminClient.query(MeDocument);
+        expect(me3?.identifier).toBe(SUPER_ADMIN_USER_IDENTIFIER);
+    });
+
+    it('logoutEverywhere removes all sessions for the user', async () => {
+        // Login with the first client
+        await adminClient.query(attemptLoginDocument, {
+            username: SUPER_ADMIN_USER_IDENTIFIER,
+            password: SUPER_ADMIN_USER_PASSWORD,
+        });
+
+        // Verify the first client is logged in
+        const { me: me1 } = await adminClient.query(MeDocument);
+        expect(me1?.identifier).toBe(SUPER_ADMIN_USER_IDENTIFIER);
+
+        // Login with the second client (creates a second session for the same user)
+        await secondAdminClient.query(attemptLoginDocument, {
+            username: SUPER_ADMIN_USER_IDENTIFIER,
+            password: SUPER_ADMIN_USER_PASSWORD,
+        });
+
+        // Verify the second client is logged in
+        const { me: me2 } = await secondAdminClient.query(MeDocument);
+        expect(me2?.identifier).toBe(SUPER_ADMIN_USER_IDENTIFIER);
+
+        // Logout everywhere from the first client
+        const { logoutEverywhere } = await adminClient.query(logoutEverywhereDocument);
+        expect(logoutEverywhere.success).toBe(true);
+
+        // Verify the first client is now logged out
+        try {
+            await adminClient.query(MeDocument);
+            fail('Should have thrown');
+        } catch (e: any) {
+            expect(e.message).toContain('You are not currently authorized to perform this action');
+        }
+
+        // Verify the second client is also logged out
+        try {
+            await secondAdminClient.query(MeDocument);
+            fail('Should have thrown');
+        } catch (e: any) {
+            expect(e.message).toContain('You are not currently authorized to perform this action');
+        }
+    });
 });
 
 function pause(ms: number): Promise<void> {

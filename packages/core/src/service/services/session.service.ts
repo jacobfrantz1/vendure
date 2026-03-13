@@ -308,6 +308,15 @@ export class SessionService implements EntitySubscriberInterface, OnApplicationB
 
     /**
      * @description
+     * Deletes the session with the given token.
+     */
+    async deleteSessionByToken(ctx: RequestContext, sessionToken: string): Promise<void> {
+        await this.connection.getRepository(ctx, AuthenticatedSession).delete({ token: sessionToken });
+        await this.withTimeout(this.sessionCacheStrategy.delete(sessionToken));
+    }
+
+    /**
+     * @description
      * Deletes all existing sessions for the given user.
      */
     async deleteSessionsByUser(ctx: RequestContext, user: User): Promise<void> {

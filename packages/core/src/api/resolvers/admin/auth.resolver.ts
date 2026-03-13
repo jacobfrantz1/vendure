@@ -74,6 +74,17 @@ export class AuthResolver extends BaseAuthResolver {
         return super.logout(ctx, req, res);
     }
 
+    @Transaction()
+    @Mutation()
+    @Allow(Permission.Public)
+    logoutEverywhere(
+        @Ctx() ctx: RequestContext,
+        @Context('req') req: Request,
+        @Context('res') res: Response,
+    ): Promise<Success> {
+        return super.logoutEverywhere(ctx, req, res);
+    }
+
     @Query()
     @Allow(Permission.Authenticated, Permission.Owner)
     me(@Ctx() ctx: RequestContext) {
