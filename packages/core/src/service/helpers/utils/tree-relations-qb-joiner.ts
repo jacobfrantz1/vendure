@@ -100,10 +100,22 @@ export function joinTreeRelationsDynamically<T extends VendureEntity>(
 
         const relationIsSelfReferencing = relationMetadata.inverseEntityMetadata === currentMetadata;
 
+        // Check if the inverse (target) entity has any self-referencing relations.
+        // This handles cases where a relation chain passes through an entity that has
+        // self-referencing relations (e.g. a custom field relation from OrderLine back
+        // to OrderLine). Without this, the intermediate join would be left to TypeORM's
+        // query strategy, which generates ambiguous column names on the self-join.
+        const inverseEntityHasSelfReferencingRelations =
+            relationMetadata.inverseEntityMetadata.relations.some(
+                r => r.inverseEntityMetadata === relationMetadata.inverseEntityMetadata,
+            );
+
         // Only proceed with manual joining if:
         // 1. We're in a tree entity context (using @Tree, @TreeParent, @TreeChildren), OR
-        // 2. This specific relation is self-referencing (either the relation is self-referencing or the relation is a custom field relation)
-        if (!currentMetadataIsTree && !relationIsSelfReferencing) {
+        // 2. This specific relation is self-referencing, OR
+        // 3. The target entity has self-referencing relations (so we handle the intermediate
+        //    join here with proper aliasing before the self-referencing join)
+        if (!currentMetadataIsTree && !relationIsSelfReferencing && !inverseEntityHasSelfReferencingRelations) {
             return;
         }
 
@@ -127,7 +139,7 @@ export function joinTreeRelationsDynamically<T extends VendureEntity>(
         const inverseEntityMetadataIsTree = isTreeEntityMetadata(relationMetadata.inverseEntityMetadata);
 
         const shouldProcessSubRelations =
-            currentMetadataIsTree || inverseEntityMetadataIsTree || relationIsSelfReferencing;
+            currentMetadataIsTree || inverseEntityMetadataIsTree || relationIsSelfReferencing || inverseEntityHasSelfReferencingRelations;
 
         if (!shouldProcessSubRelations) {
             return;
@@ -135,7 +147,7 @@ export function joinTreeRelationsDynamically<T extends VendureEntity>(
 
         const newEagerDepth = relationMetadata.isEager ? eagerDepth + 1 : eagerDepth;
 
-        const propagatedTreeContext = currentMetadataIsTree || relationIsSelfReferencing;
+        const propagatedTreeContext = currentMetadataIsTree || relationIsSelfReferencing || inverseEntityHasSelfReferencingRelations;
 
         if (newEagerDepth <= maxEagerDepth) {
             relationMetadata.inverseEntityMetadata.relations.forEach(subRelation => {
