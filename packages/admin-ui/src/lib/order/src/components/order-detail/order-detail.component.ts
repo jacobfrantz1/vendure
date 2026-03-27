@@ -611,6 +611,52 @@ export class OrderDetailComponent
                     if (!input) {
                         return of(undefined);
                     }
+                    if (input.refunds.length) {
+                        return forkJoin(
+                            input.refunds.map(refund =>
+                                this.dataService.order.refundOrder(refund).pipe(map(res => res.refundOrder)),
+                            ),
+                        ).pipe(
+                            map(results => {
+                                let hasError = false;
+                                for (const result of results ?? []) {
+                                    if (result) {
+                                        switch (result.__typename) {
+                                            case 'Refund':
+                                                if (result.state === 'Failed') {
+                                                    this.notificationService.error(
+                                                        _('order.refund-order-failed'),
+                                                    );
+                                                    hasError = true;
+                                                } else {
+                                                    this.notificationService.success(
+                                                        _('order.refund-order-success'),
+                                                    );
+                                                }
+                                                break;
+                                            case 'AlreadyRefundedError':
+                                            case 'NothingToRefundError':
+                                            case 'PaymentOrderMismatchError':
+                                            case 'RefundOrderStateError':
+                                            case 'RefundStateTransitionError':
+                                                this.notificationService.error(result.message);
+                                                hasError = true;
+                                                break;
+                                        }
+                                    }
+                                }
+                                this.refetchOrder(results?.[0]).subscribe();
+                                return hasError ? undefined : input;
+                            }),
+                        );
+                    } else {
+                        return [input];
+                    }
+                }),
+                switchMap(input => {
+                    if (!input) {
+                        return of(undefined);
+                    }
 
                     if (input.cancel.lines?.length) {
                         return this.dataService.order.cancelOrder(input.cancel).pipe(
@@ -625,7 +671,7 @@ export class OrderDetailComponent
                                                 count: summate(input.cancel.lines, 'quantity'),
                                             },
                                         );
-                                        return input;
+                                        return undefined;
                                     case 'CancelActiveOrderError':
                                     case 'QuantityTooGreatError':
                                     case 'MultipleOrderError':
@@ -637,47 +683,11 @@ export class OrderDetailComponent
                             }),
                         );
                     } else {
-                        return [input];
-                    }
-                }),
-                switchMap(input => {
-                    if (!input) {
-                        return of(undefined);
-                    }
-                    if (input.refunds.length) {
-                        return forkJoin(
-                            input.refunds.map(refund =>
-                                this.dataService.order.refundOrder(refund).pipe(map(res => res.refundOrder)),
-                            ),
-                        );
-                    } else {
                         return [undefined];
                     }
                 }),
             )
-            .subscribe(results => {
-                for (const result of results ?? []) {
-                    if (result) {
-                        switch (result.__typename) {
-                            case 'Refund':
-                                if (result.state === 'Failed') {
-                                    this.notificationService.error(_('order.refund-order-failed'));
-                                } else {
-                                    this.notificationService.success(_('order.refund-order-success'));
-                                }
-                                break;
-                            case 'AlreadyRefundedError':
-                            case 'NothingToRefundError':
-                            case 'PaymentOrderMismatchError':
-                            case 'RefundOrderStateError':
-                            case 'RefundStateTransitionError':
-                                this.notificationService.error(result.message);
-                                break;
-                        }
-                    }
-                }
-                this.refetchOrder(results?.[0]).subscribe();
-            });
+            .subscribe();
     }
 
     private refetchOrder(result: object | undefined): Observable<GetOrderQuery | undefined> {
