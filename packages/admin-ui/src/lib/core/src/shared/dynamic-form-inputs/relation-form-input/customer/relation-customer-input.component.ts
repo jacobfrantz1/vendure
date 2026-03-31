@@ -1,4 +1,4 @@
-import { ChangeDetectionStrategy, Component, Input, OnInit, TemplateRef, ViewChild } from '@angular/core';
+import { ChangeDetectionStrategy, ChangeDetectorRef, Component, Input, OnInit, TemplateRef, ViewChild } from '@angular/core';
 import { UntypedFormControl } from '@angular/forms';
 import { marker as _ } from '@biesbjerg/ngx-translate-extract-marker';
 import { Observable, Subject } from 'rxjs';
@@ -33,6 +33,7 @@ export class RelationCustomerInputComponent implements OnInit {
     constructor(
         private modalService: ModalService,
         private dataService: DataService,
+        private changeDetectorRef: ChangeDetectorRef,
     ) {}
 
     ngOnInit() {
@@ -60,6 +61,7 @@ export class RelationCustomerInputComponent implements OnInit {
                 if (result) {
                     this.parentFormControl.setValue(result);
                     this.parentFormControl.markAsDirty();
+                    this.changeDetectorRef.markForCheck();
                 }
             });
     }
