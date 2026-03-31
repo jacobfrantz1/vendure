@@ -1,4 +1,4 @@
-import { JobListOptions, JobState } from '@vendure/common/lib/generated-types';
+import { JobFilterParameter, JobListOptions, JobState } from '@vendure/common/lib/generated-types';
 import { notNullOrUndefined } from '@vendure/common/lib/shared-utils';
 import {
     ID,
@@ -38,6 +38,53 @@ import { BullMQPluginOptions, CustomScriptDefinition } from './types';
 import { getPrefix } from './utils';
 
 /**
+ * Maps a Vendure JobState string to BullMQ JobType array(s).
+ */
+function vendureStateToJobTypes(state: string): JobType[] {
+    switch (state) {
+        case 'PENDING':
+            return ['wait', 'waiting-children', 'prioritized'];
+        case 'RUNNING':
+            return ['active'];
+        case 'COMPLETED':
+            return ['completed'];
+        case 'RETRYING':
+            return ['repeat'];
+        case 'FAILED':
+            return ['failed'];
+        case 'CANCELLED':
+            return ['failed'];
+        default:
+            return [];
+    }
+}
+
+/**
+ * Recursively extracts state, isSettled, and queueName filter values
+ * from a JobFilterParameter, unwrapping `_and` logical operators.
+ */
+function extractJobFilters(
+    jobFilter: JobFilterParameter,
+): Pick<JobFilterParameter, 'state' | 'isSettled' | 'queueName'> {
+    const result: Pick<JobFilterParameter, 'state' | 'isSettled' | 'queueName'> = {};
+
+    if (jobFilter.state) result.state = jobFilter.state;
+    if (jobFilter.isSettled) result.isSettled = jobFilter.isSettled;
+    if (jobFilter.queueName) result.queueName = jobFilter.queueName;
+
+    if (jobFilter._and) {
+        for (const subFilter of jobFilter._and) {
+            const extracted = extractJobFilters(subFilter);
+            if (extracted.state && !result.state) result.state = extracted.state;
+            if (extracted.isSettled && !result.isSettled) result.isSettled = extracted.isSettled;
+            if (extracted.queueName && !result.queueName) result.queueName = extracted.queueName;
+        }
+    }
+
+    return result;
+}
+
+/**
  * @description
  * This JobQueueStrategy uses [BullMQ](https://docs.bullmq.io/) to implement a push-based job queue
  * on top of Redis. It should not be used alone, but as part of the {@link BullMQJobQueuePlugin}.
@@ -47,6 +94,21 @@ import { getPrefix } from './utils';
  * ```shell
  * npm install bullmq@^5.4.2
  * ```
+ *
+ * ## Filtering limitations
+ *
+ * The `findMany()` method supports a subset of the `JobListOptions` filter operators,
+ * since job data is stored in Redis rather than a relational database:
+ *
+ * - **`state`**: `eq`, `in`, `notEq`, `notIn`. Other string operators (`contains`, `regex`, etc.)
+ *   are not supported since state is an enum-like value.
+ * - **`queueName`**: `eq`, `in`. Negative/partial matching (`notEq`, `notIn`, `contains`, `regex`)
+ *   is not supported because it would require enumerating all indexed queue keys in Redis.
+ * - **`isSettled`**: `eq` only. Note: when both `state` and `isSettled` filters are present,
+ *   `isSettled` takes precedence and overwrites the state filter.
+ * - **`_and`**: Supported — nested filters are unwrapped and applied conjunctively.
+ * - **`_or`**: Not supported — ignored if present.
+ * - Other filter fields (`attempts`, `createdAt`, `duration`, etc.) are not evaluated by this strategy.
  *
  * @docsCategory core plugins/JobQueuePlugin
  */
@@ -197,35 +259,46 @@ export class BullMQJobQueueStrategy implements InspectableJobQueueStrategy {
         const skip = options?.skip ?? 0;
         const take = options?.take ?? 10;
         let jobTypes: JobType[] = ALL_JOB_TYPES;
-        const stateFilter = options?.filter?.state;
-        if (stateFilter?.eq) {
-            switch (stateFilter.eq) {
-                case 'PENDING':
-                    jobTypes = ['wait', 'waiting-children', 'prioritized'];
-                    break;
-                case 'RUNNING':
-                    jobTypes = ['active'];
-                    break;
-                case 'COMPLETED':
-                    jobTypes = ['completed'];
-                    break;
-                case 'RETRYING':
-                    jobTypes = ['repeat'];
-                    break;
-                case 'FAILED':
-                    jobTypes = ['failed'];
-                    break;
-                case 'CANCELLED':
-                    jobTypes = ['failed'];
-                    break;
+
+        const {
+            state: stateFilter,
+            isSettled: settledFilter,
+            queueName: queueNameFilter,
+        } = options?.filter ? extractJobFilters(options.filter) : {};
+
+        if (stateFilter) {
+            if (stateFilter.eq) {
+                jobTypes = vendureStateToJobTypes(stateFilter.eq);
+            } else if (stateFilter.in?.length) {
+                const typeSet = new Set<JobType>();
+                for (const state of stateFilter.in) {
+                    for (const type of vendureStateToJobTypes(state)) {
+                        typeSet.add(type);
+                    }
+                }
+                jobTypes = [...typeSet];
+            } else if (stateFilter.notEq) {
+                const excludeTypes = vendureStateToJobTypes(stateFilter.notEq);
+                jobTypes = ALL_JOB_TYPES.filter(t => !excludeTypes.includes(t));
+            } else if (stateFilter.notIn?.length) {
+                const excludeTypes = new Set(stateFilter.notIn.flatMap(vendureStateToJobTypes));
+                jobTypes = ALL_JOB_TYPES.filter(t => !excludeTypes.has(t));
             }
         }
-        const settledFilter = options?.filter?.isSettled;
+        // Note: isSettled overwrites the state filter rather than intersecting with it.
+        // This matches the existing behavior but may need revisiting.
         if (settledFilter?.eq != null) {
             jobTypes =
                 settledFilter.eq === true
                     ? ['completed', 'failed']
                     : ['wait', 'waiting-children', 'active', 'repeat', 'delayed', 'paused', 'prioritized'];
+        }
+
+        let queueNameFilterValue = '';
+        if (queueNameFilter?.eq) {
+            queueNameFilterValue = queueNameFilter.eq;
+        } else if (queueNameFilter?.in?.length) {
+            queueNameFilterValue = queueNameFilter.in.join(',');
         }
 
         let items: Bull.Job[] = [];
@@ -235,7 +308,7 @@ export class BullMQJobQueueStrategy implements InspectableJobQueueStrategy {
             const [total, jobIds] = await this.callCustomScript(getJobsByType, [
                 skip,
                 take,
-                options?.filter?.queueName?.eq ?? '',
+                queueNameFilterValue,
                 ...jobTypes,
             ]);
             items = (

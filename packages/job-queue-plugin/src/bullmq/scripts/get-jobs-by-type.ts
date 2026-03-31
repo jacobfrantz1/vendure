@@ -2,12 +2,12 @@ import { CustomScriptDefinition } from '../types';
 
 // language=Lua
 const script = `--[[
-  Get job ids per provided states and filter by name - Optimized version using indexed structure
+  Get job ids per provided states and filter by queue name(s) - Optimized version using indexed structure
     Input:
       KEYS[1]    'prefix'
       ARGV[1]    skip
       ARGV[2]    take
-      ARGV[3]    filterName
+      ARGV[3]    filterName(s) - comma separated string
       ARGV[4...] types
 ]]
 local rcall = redis.call
@@ -39,23 +39,30 @@ local function countJobsInList(key)
     return rcall('LLEN', key) or 0
 end
 
+-- Helper to process a key: check its type and add to the appropriate list
+local function processKey(key)
+    -- redis.log(redis.LOG_NOTICE, 'Looking for key: ' .. key)
+    local keyType = rcall('TYPE', key).ok
+    -- redis.log(redis.LOG_NOTICE, 'Key type: ' .. keyType)
+    if keyType == 'zset' then
+        totalResults = totalResults + countJobsInSortedSet(key)
+        table.insert(sourceKeys, key)
+    elseif keyType == 'list' then
+        totalResults = totalResults + countJobsInList(key)
+        table.insert(listKeys, key)
+        -- redis.log(redis.LOG_NOTICE, 'total jobs in list: ' .. totalResults)
+    end
+end
+
 -- First count total jobs and collect source keys
 if filterName ~= "" then
-    -- When filtering by name, we need to check each state
+    -- When filtering by name(s), check each (name, state) pair
     for i = 4, #ARGV do
         local state = ARGV[i]
         -- redis.log(redis.LOG_NOTICE, 'Processing state: "' .. state .. '"')
-        local indexedKey = prefix .. 'queue:' .. filterName .. ':' .. state
-        -- redis.log(redis.LOG_NOTICE, 'Looking for key: ' .. indexedKey)
-        local keyType = rcall('TYPE', indexedKey).ok
-        -- redis.log(redis.LOG_NOTICE, 'Key type: ' .. keyType)
-
-        if keyType == 'zset' then
-            totalResults = totalResults + countJobsInSortedSet(indexedKey)
-            table.insert(sourceKeys, indexedKey)
-        elseif keyType == 'list' then
-            totalResults = totalResults + countJobsInList(indexedKey)
-            table.insert(listKeys, indexedKey)
+        for name in string.gmatch(filterName, "[^,]+") do
+            local indexedKey = prefix .. 'queue:' .. name .. ':' .. state
+            processKey(indexedKey)
         end
     end
 else
@@ -64,18 +71,7 @@ else
         local state = ARGV[i]
         -- redis.log(redis.LOG_NOTICE, 'Processing state: "' .. state .. '"')
         local key = prefix .. state
-        -- redis.log(redis.LOG_NOTICE, 'Looking for key: ' .. key)
-        local keyType = rcall('TYPE', key).ok
-        -- redis.log(redis.LOG_NOTICE, 'Key type: ' .. keyType)
-
-        if keyType == 'zset' then
-            totalResults = totalResults + countJobsInSortedSet(key)
-            table.insert(sourceKeys, key)
-        elseif keyType == 'list' then
-            totalResults = totalResults + countJobsInList(key)
-            table.insert(listKeys, key)
-            -- redis.log(redis.LOG_NOTICE, 'total jobs in list: ' .. totalResults)
-        end
+        processKey(key)
     end
 end
 
@@ -184,7 +180,7 @@ return {totalResults, results}
 
 export const getJobsByType: CustomScriptDefinition<
     [totalItems: number, jobIds: string[]],
-    [skip: number, take: number, queueName: string | undefined, ...states: string[]]
+    [skip: number, take: number, filterNames: string | undefined, ...states: string[]]
 > = {
     script,
     numberOfKeys: 1,
